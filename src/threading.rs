@@ -1,5 +1,5 @@
-//! Concurrency primitives: request batching, bounded worker pools, and the
-//! progress channel.
+//! Concurrency primitives: request batching, the IO reactor, bounded worker
+//! pools, and the progress channel.
 //!
 //! Submitted work runs on Tokio tasks that are aborted when their handles are
 //! dropped, so cancelling an analysis also cancels its queued and running
@@ -11,7 +11,9 @@ use std::hash::Hash;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 
+use futures_util::stream::{FuturesOrdered, TryStreamExt};
 use futures_util::FutureExt;
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::JoinHandle;
 
@@ -210,6 +212,30 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     format!("worker task panicked: {text}")
 }
 
+/// Spawns `work` on `runtime` once a permit is free; permits are granted in
+/// submission order.
+fn spawn_submitted<T, Fut>(runtime: &Handle, permits: Arc<Semaphore>, work: Fut) -> Submitted<T>
+where
+    T: Send + Sync + 'static,
+    Fut: Future<Output = Result<T, String>> + Send + 'static,
+{
+    let (sender, receiver) = watch::channel(None);
+    let task = runtime.spawn(async move {
+        let Ok(_permit) = permits.acquire_owned().await else {
+            return;
+        };
+        let outcome = match AssertUnwindSafe(work).catch_unwind().await {
+            Ok(result) => result.map(Arc::new),
+            Err(payload) => Err(panic_message(payload.as_ref())),
+        };
+        sender.send_replace(Some(outcome));
+    });
+    Submitted {
+        receiver,
+        _task: Arc::new(AbortOnDrop(task)),
+    }
+}
+
 /// A pool that runs at most `workers` tasks at once, in submission order.
 #[derive(Clone)]
 pub struct WorkerPool {
@@ -244,22 +270,7 @@ impl WorkerPool {
         T: Send + Sync + 'static,
         Fut: Future<Output = Result<T, String>> + Send + 'static,
     {
-        let (sender, receiver) = watch::channel(None);
-        let permits = Arc::clone(&self.permits);
-        let task = tokio::spawn(async move {
-            let Ok(_permit) = permits.acquire_owned().await else {
-                return;
-            };
-            let outcome = match AssertUnwindSafe(work).catch_unwind().await {
-                Ok(result) => result.map(Arc::new),
-                Err(payload) => Err(panic_message(payload.as_ref())),
-            };
-            sender.send_replace(Some(outcome));
-        });
-        Submitted {
-            receiver,
-            _task: Arc::new(AbortOnDrop(task)),
-        }
+        spawn_submitted(&Handle::current(), Arc::clone(&self.permits), work)
     }
 
     /// Queues CPU-bound work on Tokio's blocking threads, limited by this pool.
@@ -277,14 +288,79 @@ impl WorkerPool {
     }
 }
 
-/// Runs `first` for every input in `first_pool` as soon as possible, then
-/// feeds each result, in input order, to `second` in `second_pool`. Dropping
-/// the returned future (or failing early) cancels everything still queued.
+/// Keeps the IO runtime alive with the reactor; shuts it down without blocking
+/// so the reactor can be dropped from async code.
+struct OwnedRuntime(Option<Runtime>);
+
+impl Drop for OwnedRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+/// A dedicated single-threaded Tokio runtime for IO-bound work (child
+/// processes, pipes, timers). One thread suffices because waiting happens in
+/// the OS, not on the thread: on Unix the reactor polls pipes through
+/// epoll/kqueue and reaps children through pidfd or `SIGCHLD`. On Windows,
+/// Tokio waits for child exit through `RegisterWaitForSingleObject` but reads
+/// child pipes on this runtime's blocking threads, as it does for `tokio::fs`.
+///
+/// `in_flight` bounds how many tasks run at once (open processes and pipes),
+/// not how many threads are used.
+pub struct IoReactor {
+    handle: Handle,
+    in_flight: Arc<Semaphore>,
+    limit: usize,
+    _runtime: OwnedRuntime,
+}
+
+impl IoReactor {
+    pub const THREADS: usize = 1;
+
+    /// Starts the reactor thread. `in_flight` is never fewer than one so
+    /// submitted work cannot deadlock.
+    pub fn new(in_flight: usize, name: &str) -> std::io::Result<Self> {
+        let limit = in_flight.max(1);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(Self::THREADS)
+            .thread_name(name)
+            .enable_all()
+            .build()?;
+        Ok(Self {
+            handle: runtime.handle().clone(),
+            in_flight: Arc::new(Semaphore::new(limit)),
+            limit,
+            _runtime: OwnedRuntime(Some(runtime)),
+        })
+    }
+
+    pub fn max_in_flight(&self) -> usize {
+        self.limit
+    }
+
+    /// Queues an async task on the reactor thread. Can be called from any
+    /// runtime or none.
+    pub fn submit<T, Fut>(&self, work: Fut) -> Submitted<T>
+    where
+        T: Send + Sync + 'static,
+        Fut: Future<Output = Result<T, String>> + Send + 'static,
+    {
+        spawn_submitted(&self.handle, Arc::clone(&self.in_flight), work)
+    }
+}
+
+/// Runs `fetch` for every input on the IO reactor as soon as possible and
+/// hands each result to `parse` in `parsing_pool` the moment it arrives.
+/// Results come back in input order, and the first failure in input order wins.
+/// Dropping the returned future (or failing early) cancels everything still
+/// queued or running.
 pub async fn pass_all_async<A, B, C, F1, Fut1, F2>(
-    first_pool: &WorkerPool,
-    second_pool: &WorkerPool,
-    first: F1,
-    second: F2,
+    io: &IoReactor,
+    parsing_pool: &WorkerPool,
+    fetch: F1,
+    parse: F2,
     inputs: Vec<A>,
 ) -> Result<Vec<C>, String>
 where
@@ -294,19 +370,23 @@ where
     Fut1: Future<Output = Result<B, String>> + Send + 'static,
     F2: Fn(Arc<B>) -> Result<C, String> + Send + Sync + 'static,
 {
-    let second = Arc::new(second);
-    let firsts: Vec<Submitted<B>> = inputs
+    let parse = Arc::new(parse);
+    let mut stages: FuturesOrdered<_> = inputs
         .into_iter()
-        .map(|input| first_pool.submit(first(input)))
+        .map(|input| {
+            let fetched = io.submit(fetch(input));
+            let parse = Arc::clone(&parse);
+            async move {
+                let intermediate = fetched.wait().await?;
+                drop(fetched);
+                let parsed = parsing_pool.submit_blocking(move || parse(intermediate));
+                parsed.wait().await
+            }
+        })
         .collect();
 
-    let mut results = Vec::with_capacity(firsts.len());
-    for stage_one in firsts {
-        let intermediate = stage_one.wait().await?;
-        let second = Arc::clone(&second);
-        let stage_two = second_pool.submit_blocking(move || second(intermediate));
-        let value = stage_two.wait().await?;
-        drop(stage_two);
+    let mut results = Vec::with_capacity(stages.len());
+    while let Some(value) = stages.try_next().await? {
         results.push(Arc::try_unwrap(value).unwrap_or_else(|shared| (*shared).clone()));
     }
     Ok(results)
@@ -314,10 +394,10 @@ where
 
 /// [`pass_all_async`] for a single input.
 pub async fn pass_through_async<A, B, C, F1, Fut1, F2>(
-    first_pool: &WorkerPool,
-    second_pool: &WorkerPool,
-    first: F1,
-    second: F2,
+    io: &IoReactor,
+    parsing_pool: &WorkerPool,
+    fetch: F1,
+    parse: F2,
     input: A,
 ) -> Result<C, String>
 where
@@ -327,7 +407,7 @@ where
     Fut1: Future<Output = Result<B, String>> + Send + 'static,
     F2: Fn(Arc<B>) -> Result<C, String> + Send + Sync + 'static,
 {
-    let mut values = pass_all_async(first_pool, second_pool, first, second, vec![input]).await?;
+    let mut values = pass_all_async(io, parsing_pool, fetch, parse, vec![input]).await?;
     Ok(values.remove(0))
 }
 
@@ -496,12 +576,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reactor_runs_all_io_on_one_dedicated_thread() {
+        let reactor = IoReactor::new(64, "reactor-test").unwrap();
+        let caller = std::thread::current().id();
+        let tasks: Vec<_> = (0..64)
+            .map(|_| {
+                reactor.submit(async {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let thread = std::thread::current();
+                    Ok((thread.id(), thread.name().map(str::to_owned)))
+                })
+            })
+            .collect();
+        let mut threads = std::collections::HashSet::new();
+        for task in &tasks {
+            let (id, name) = (*within(task.wait()).await.unwrap()).clone();
+            assert_ne!(id, caller);
+            assert_eq!(name.as_deref(), Some("reactor-test"));
+            threads.insert(id);
+        }
+        assert_eq!(threads.len(), IoReactor::THREADS);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn reactor_overlaps_waits_up_to_its_in_flight_limit() {
+        let reactor = IoReactor::new(3, "reactor-limit").unwrap();
+        assert_eq!(IoReactor::new(0, "reactor-min").unwrap().max_in_flight(), 1);
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let tasks: Vec<_> = (0..12)
+            .map(|_| {
+                let (running, peak) = (running.clone(), peak.clone());
+                reactor.submit(async move {
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    running.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            })
+            .collect();
+        for task in &tasks {
+            within(task.wait()).await.unwrap();
+        }
+        // One thread still overlaps several waits, but never beyond the limit.
+        assert_eq!(peak.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn reactor_can_be_dropped_inside_a_runtime() {
+        let reactor = IoReactor::new(1, "reactor-drop").unwrap();
+        let pending = reactor.submit::<(), _>(std::future::pending());
+        drop(reactor);
+        assert!(within(pending.wait()).await.is_err());
+    }
+
+    #[tokio::test]
     async fn two_stage_pipeline_preserves_order_and_fails_fast() {
-        let (first, second) = (WorkerPool::new(3, "first"), WorkerPool::new(1, "second"));
+        let (first, second) = (
+            IoReactor::new(3, "first").unwrap(),
+            WorkerPool::new(1, "second"),
+        );
         let values = pass_all_async(
             &first,
             &second,
-            |value: u32| async move { Ok(value * 2) },
+            |value: u32| async move {
+                // Later inputs finish first; output order must not follow.
+                tokio::time::sleep(Duration::from_millis(u64::from(30 - value * 10))).await;
+                Ok(value * 2)
+            },
             |value: Arc<u32>| Ok(format!("v{value}")),
             vec![1, 2, 3],
         )
@@ -539,14 +682,20 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_a_pipeline_cancels_queued_work() {
-        let pool = WorkerPool::new(1, "cancel");
+        let reactor = Arc::new(IoReactor::new(1, "cancel").unwrap());
+        let pool = WorkerPool::new(1, "cancel-parse");
         let started = Arc::new(AtomicUsize::new(0));
         let blocker = Arc::new(Notify::new());
         let pipeline = {
-            let (pool, started, blocker) = (pool.clone(), started.clone(), blocker.clone());
+            let (reactor, pool, started, blocker) = (
+                reactor.clone(),
+                pool.clone(),
+                started.clone(),
+                blocker.clone(),
+            );
             tokio::spawn(async move {
                 pass_all_async(
-                    &pool,
+                    &reactor,
                     &pool,
                     |_: u8| {
                         let (started, blocker) = (started.clone(), blocker.clone());
@@ -572,7 +721,9 @@ mod tests {
         let _ = pipeline.await;
         // The single permit is released, so new work runs and queued work never started.
         assert_eq!(
-            *within(pool.submit(async { Ok(9) }).wait()).await.unwrap(),
+            *within(reactor.submit(async { Ok(9) }).wait())
+                .await
+                .unwrap(),
             9
         );
         assert_eq!(started.load(Ordering::SeqCst), 1);

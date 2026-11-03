@@ -46,8 +46,9 @@ fn main() -> ExitCode {
         service.parsing_workers()
     );
     println!(
-        "number of cores available for commandPool: {}",
-        service.command_workers()
+        "threads for the IO reactor: {} (up to {} commands in flight)",
+        service.io_threads(),
+        service.io_in_flight()
     );
     clean_environment();
 

@@ -30,12 +30,13 @@ use crate::security::{
 };
 use crate::text::unique;
 use crate::threading::{
-    emit, pass_all_async, pass_through_async, safe_print, AwaitBatch, BatchAborted, WorkerPool,
+    emit, pass_all_async, pass_through_async, safe_print, AwaitBatch, BatchAborted, IoReactor,
+    WorkerPool,
 };
 use crate::types::{BranchData, CommitData, ContributorData, RepositoryData};
 
 const CLONE_TIMEOUT_SECONDS: u64 = 10;
-const COMMAND_POOL_MULTIPLIER: usize = 4;
+const IO_IN_FLIGHT_MULTIPLIER: usize = 4;
 
 type Progress = Sender<String>;
 type DirectoryLock = (Arc<AsyncMutex<()>>, usize);
@@ -248,7 +249,7 @@ impl Drop for DirectoryLease {
 /// repository share one analysis; the first caller (the leader) owns progress.
 pub struct RepositoryService {
     parsing_pool: WorkerPool,
-    command_pool: WorkerPool,
+    io: IoReactor,
     requests: AwaitBatch<PathBuf, SharedResult>,
     directories: DirectoryRegistry,
 }
@@ -260,13 +261,18 @@ impl Default for RepositoryService {
 }
 
 impl RepositoryService {
-    /// Creates the service with `N` parsing workers and `4N` command workers
-    /// for `N` logical cores.
+    /// Creates the service with `N` parsing workers for `N` logical cores and
+    /// a single-threaded IO reactor running up to `4N` commands at once.
+    ///
+    /// # Panics
+    ///
+    /// If the operating system refuses to start the reactor thread.
     pub fn new() -> Self {
         let cores = available_parallelism().map_or(1, usize::from);
         Self {
             parsing_pool: WorkerPool::new(cores, "Parsing Pool"),
-            command_pool: WorkerPool::new(cores * COMMAND_POOL_MULTIPLIER, "Command Pool"),
+            io: IoReactor::new(cores * IO_IN_FLIGHT_MULTIPLIER, "git-api-io")
+                .expect("failed to start the IO reactor"),
             requests: AwaitBatch::new(),
             directories: DirectoryRegistry::default(),
         }
@@ -276,8 +282,12 @@ impl RepositoryService {
         self.parsing_pool.num_workers()
     }
 
-    pub fn command_workers(&self) -> usize {
-        self.command_pool.num_workers()
+    pub fn io_threads(&self) -> usize {
+        IoReactor::THREADS
+    }
+
+    pub fn io_in_flight(&self) -> usize {
+        self.io.max_in_flight()
     }
 
     /// Validates the request and returns the repository's metrics. Validation
@@ -355,17 +365,22 @@ impl RepositoryService {
 
         let clone = async {
             emit(progress, "Cloning repo...");
-            let cloned = execute_command_timed_out(
-                CLONE_TIMEOUT_SECONDS,
-                &clone_root,
-                &clone_repo(url, &repository_path, auth_token),
-            )
-            .await?;
+            let cloned = self
+                .execute_io(
+                    Some(CLONE_TIMEOUT_SECONDS),
+                    &clone_root,
+                    clone_repo(url, &repository_path, auth_token),
+                )
+                .await?;
             parsed("Failed to clone the repo", successful(&cloned))?;
 
-            let checked =
-                execute_command(&repository_path, &check_is_git_directory(&repository_path))
-                    .await?;
+            let checked = self
+                .execute_io(
+                    None,
+                    &repository_path,
+                    check_is_git_directory(&repository_path),
+                )
+                .await?;
             parsed("Failed to initialise the filepath", successful(&checked))?;
             Ok(())
         };
@@ -389,6 +404,24 @@ impl RepositoryService {
         processing
     }
 
+    /// Runs one command on the IO reactor, optionally with a wall-clock limit.
+    async fn execute_io(
+        &self,
+        timeout_seconds: Option<u64>,
+        directory: &Path,
+        command: Command,
+    ) -> Result<CommandResult, String> {
+        let directory = directory.to_path_buf();
+        let running = self.io.submit(async move {
+            match timeout_seconds {
+                Some(seconds) => execute_command_timed_out(seconds, &directory, &command).await,
+                None => execute_command(&directory, &command).await,
+            }
+        });
+        let result = running.wait().await?;
+        Ok(Arc::unwrap_or_clone(result))
+    }
+
     async fn exec_and_parse<T>(
         &self,
         directory: &Path,
@@ -401,7 +434,7 @@ impl RepositoryService {
     {
         let directory = directory.to_path_buf();
         pass_through_async(
-            &self.command_pool,
+            &self.io,
             &self.parsing_pool,
             move |command: Command| {
                 let directory = directory.clone();
@@ -428,7 +461,7 @@ impl RepositoryService {
     {
         let directory = directory.to_path_buf();
         pass_all_async(
-            &self.command_pool,
+            &self.io,
             &self.parsing_pool,
             move |command: Command| {
                 let directory = directory.clone();
@@ -570,7 +603,7 @@ impl RepositoryService {
         let counter = Arc::new(AtomicUsize::new(0));
         let progress = progress.clone();
         pass_all_async(
-            &self.command_pool,
+            &self.io,
             &self.parsing_pool,
             move |(details, diff): (Command, Command)| {
                 let directory = directory.clone();

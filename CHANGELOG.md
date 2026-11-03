@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   image tag and cache scope are unchanged.
 - Cleanup of cloned repositories now also succeeds for read-only Git object
   files on Windows.
+- Git commands run on a dedicated single-threaded Tokio IO reactor (at most
+  `4N` in flight) instead of a `4N`-slot command pool, and each command's output
+  is parsed as soon as it arrives rather than one command at a time in input
+  order. The startup line for the command pool now reports the IO reactor.
 
 ### Fixed
 
