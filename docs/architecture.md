@@ -18,8 +18,7 @@ or its container. The wire protocol is unchanged, so callers need no rollout.
    `RepositoryService::analyze`, which validates the token, then the URL (token
    errors win), derives a credential-scoped key, and shares one analysis per key.
 4. The leader clones into `<tmp>/cloned-repos/<scope>/<host>/<owner>/<repo>`,
-   runs the Git commands on the IO reactor, parses their output in the parsing
-   pool, assembles `RepositoryData`, and removes
+   runs the Git commands in worker pools, assembles `RepositoryData`, and removes
    the clone when its last user releases it.
 
 Progress is a bounded channel (capacity 1000) filled with `try_send`: updates are
@@ -33,7 +32,7 @@ draining it. Only the leader of a shared analysis owns a progress stream.
 | `api` | HTTP and WebSocket transport, envelopes, size limits, authorization order. Generic over an `Analyzer` so tests use a controlled service. |
 | `security` | URL validation on the raw RFC 3986 syntax, token validation, SHA-256 credential scopes, constant-time key comparison, startup checks. |
 | `process` | `RepositoryService`: validation order, clone lifecycle, per-directory locks and reference counts, metric assembly. |
-| `threading` | Request batching (`AwaitBatch`), the single-threaded IO reactor, bounded worker pools, two-stage pipelines, progress `emit`. |
+| `threading` | Request batching (`AwaitBatch`), bounded worker pools, two-stage pipelines, progress `emit`. |
 | `command` | Child process execution (concurrent stdout/stderr drain, lossy UTF-8, timeout, kill on drop) and directory deletion with retries. |
 | `git_commands` | Git argument vectors and child environments. Nothing is built through a shell. |
 | `parsing` | Parsers for Git output; they keep the source's documented limitations. |
@@ -53,16 +52,12 @@ draining it. Only the leader of a shared analysis owns a progress stream.
   reference-counted results. Completed batches are not cached; failed batches are
   retried by the next request. If a leader is cancelled, its followers receive an
   error instead of a result.
-- **One IO thread, bounded CPU pool.** Every Git command (including the clone)
-  runs on `IoReactor`, a dedicated Tokio runtime with one worker thread
-  (`git-api-io`); at most `4N` commands are in flight for `N` logical cores.
-  Parsing runs on blocking threads, at most `N` at once. Each command's output
-  is handed to the parsing pool as soon as it arrives; results are collected
-  in input order and the first failure in input order is reported. On Unix the
-  reactor waits on pipes and child exit in the kernel (epoll/kqueue, pidfd or
-  `SIGCHLD`). On Windows Tokio waits for child exit in the kernel but reads child
-  pipes on the reactor's blocking threads, so pipe reads there are not
-  thread-free.
+- **Pools bound concurrency**: `N` parsing workers and `4N` command workers for
+  `N` logical cores, never fewer than one. Both are semaphores on the one Tokio
+  runtime: commands are ordinary tasks whose pipe and child-exit waits sit in
+  the runtime's single IO driver, and parsing runs on its blocking threads so
+  CPU work never stalls request handling. Each command's output is parsed as
+  soon as it arrives; results and the reported failure follow input order.
 - **Cancellation is structural.** Dropping an analysis aborts its queued tasks,
   kills its child processes (Tokio `kill_on_drop`), and releases its directory in
   the background. Cleanup failures stay visible as the request error.
