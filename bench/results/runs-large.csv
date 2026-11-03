@@ -1,0 +1,43 @@
+language,repository,run,seconds,status,commits,digest,core_digest,error
+rust,https://github.com/pallets/click,1,11.244,500,,,,"err: user error (Failed to clone the repo: Process timed out after 10000000μs for command: git ""-c"" ""credential.helper="" ""-c"" ""core.askPass=true"" ""clone"" ""--bare"" ""https://github.com/pallets/click"" ""/"
+rust,https://github.com/pallets/click,2,4.911,200,3386,71effea90f26cf64,28f040ae80dcb430,
+rust,https://github.com/pallets/click,3,4.775,200,3386,71effea90f26cf64,28f040ae80dcb430,
+rust,https://github.com/junegunn/fzf,1,5.685,200,3803,84175a3e792e8208,30f8e820e1b79366,
+rust,https://github.com/junegunn/fzf,2,6.469,200,3803,84175a3e792e8208,30f8e820e1b79366,
+rust,https://github.com/junegunn/fzf,3,10.707,500,,,,"err: user error (Failed to clone the repo: Process timed out after 10000000μs for command: git ""-c"" ""credential.helper="" ""-c"" ""core.askPass=true"" ""clone"" ""--bare"" ""https://github.com/junegunn/fzf"" ""/t"
+rust,https://github.com/tokio-rs/tokio,1,10.864,500,,,,"err: user error (Failed to clone the repo: Process timed out after 10000000μs for command: git ""-c"" ""credential.helper="" ""-c"" ""core.askPass=true"" ""clone"" ""--bare"" ""https://github.com/tokio-rs/tokio"" """
+rust,https://github.com/tokio-rs/tokio,2,9.194,200,5100,d07577945d0ff6a0,ce840a78e2521f2f,
+rust,https://github.com/tokio-rs/tokio,3,9.037,200,5100,d07577945d0ff6a0,ce840a78e2521f2f,
+rust,https://github.com/pallets/flask,1,6.002,200,5568,874f9c7e0d5b273b,84553655a233b884,
+rust,https://github.com/pallets/flask,2,6.301,200,5568,874f9c7e0d5b273b,84553655a233b884,
+rust,https://github.com/pallets/flask,3,5.97,200,5568,874f9c7e0d5b273b,84553655a233b884,
+rust,https://github.com/expressjs/express,1,4.881,200,6247,d384129e6688d663,4b242e52c74645d9,
+rust,https://github.com/expressjs/express,2,6.277,200,6247,d384129e6688d663,4b242e52c74645d9,
+rust,https://github.com/expressjs/express,3,5.264,200,6247,d384129e6688d663,4b242e52c74645d9,
+rust,https://github.com/psf/requests,1,6.329,200,6734,9bb31e2f084185a6,d6507f289b6b2c20,
+rust,https://github.com/psf/requests,2,6.371,200,6734,9bb31e2f084185a6,d6507f289b6b2c20,
+rust,https://github.com/psf/requests,3,6.358,200,6734,9bb31e2f084185a6,d6507f289b6b2c20,
+rust,https://github.com/clap-rs/clap,1,8.849,500,,,,err: user error (Failed to formulate all commit data: Invalid change type: T)
+rust,https://github.com/clap-rs/clap,2,7.169,500,,,,err: user error (Failed to formulate all commit data: Invalid change type: T)
+rust,https://github.com/clap-rs/clap,3,7.487,500,,,,err: user error (Failed to formulate all commit data: Invalid change type: T)
+haskell,https://github.com/pallets/click,1,8.148,200,3386,8e609211c14a427e,28f040ae80dcb430,
+haskell,https://github.com/pallets/click,2,9.584,200,3386,8e609211c14a427e,28f040ae80dcb430,
+haskell,https://github.com/pallets/click,3,8.171,200,3386,8e609211c14a427e,28f040ae80dcb430,
+haskell,https://github.com/junegunn/fzf,1,10.55,200,3803,096e09b2f7af4968,30f8e820e1b79366,
+haskell,https://github.com/junegunn/fzf,2,9.897,200,3803,096e09b2f7af4968,30f8e820e1b79366,
+haskell,https://github.com/junegunn/fzf,3,9.751,200,3803,096e09b2f7af4968,30f8e820e1b79366,
+haskell,https://github.com/tokio-rs/tokio,1,21.773,200,5100,aab1e70e94040eb1,ce840a78e2521f2f,
+haskell,https://github.com/tokio-rs/tokio,2,22.102,200,5100,aab1e70e94040eb1,ce840a78e2521f2f,
+haskell,https://github.com/tokio-rs/tokio,3,22.891,200,5100,aab1e70e94040eb1,ce840a78e2521f2f,
+haskell,https://github.com/pallets/flask,1,13.51,200,5568,302d0e3947d30eaa,84553655a233b884,
+haskell,https://github.com/pallets/flask,2,13.854,200,5568,302d0e3947d30eaa,84553655a233b884,
+haskell,https://github.com/pallets/flask,3,13.182,200,5568,302d0e3947d30eaa,84553655a233b884,
+haskell,https://github.com/expressjs/express,1,13.389,200,6247,ca300f962bcb3ef9,4b242e52c74645d9,
+haskell,https://github.com/expressjs/express,2,12.844,200,6247,ca300f962bcb3ef9,4b242e52c74645d9,
+haskell,https://github.com/expressjs/express,3,13.156,200,6247,ca300f962bcb3ef9,4b242e52c74645d9,
+haskell,https://github.com/psf/requests,1,107.348,200,6734,94159db0d90ad006,37bdbd06c14f0d14,
+haskell,https://github.com/psf/requests,2,107.776,200,6734,94159db0d90ad006,37bdbd06c14f0d14,
+haskell,https://github.com/psf/requests,3,108.396,200,6734,94159db0d90ad006,37bdbd06c14f0d14,
+haskell,https://github.com/clap-rs/clap,1,11.892,500,,,,err: user error (Failed to formulate all commit data: Invalid change type: T)
+haskell,https://github.com/clap-rs/clap,2,10.418,500,,,,err: user error (Failed to formulate all commit data: Invalid change type: T)
+haskell,https://github.com/clap-rs/clap,3,10.277,500,,,,err: user error (Failed to formulate all commit data: Invalid change type: T)

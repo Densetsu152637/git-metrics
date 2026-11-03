@@ -1,0 +1,11 @@
+repository,rust_median_s,rust_ok_runs,rust_commits,rust_digest,haskell_median_s,haskell_ok_runs,haskell_commits,haskell_digest
+https://github.com/octocat/Hello-World,1.509,3,5,824ed1f1539caacc,1.884,3,5,824ed1f1539caacc
+https://github.com/kelseyhightower/nocode,2.024,3,4,59efdf114806534b,1.823,3,4,59efdf114806534b
+https://github.com/jonschlinkert/is-number,1.447,3,62,7671cc2cb6b1be3c,2.159,3,62,faa2f6f0718d95ce
+https://github.com/expressjs/cors,2.339,3,357,e796ba6ff67c7260,3.151,2,357,15f2636c4f790c83
+https://github.com/chalk/chalk,1.748,3,381,50e65c94aafbf7bc,4.421,3,381,de889353e638ce4b
+https://github.com/pallets/itsdangerous,1.731,3,677,49c8cc25867bcecc,3.454,3,677,24463794acbe86ca
+https://github.com/dtolnay/anyhow,2.009,3,933,4223bea4b42d221d,4.09,3,933,4223bea4b42d221d
+https://github.com/sindresorhus/got,4.012,3,1800,06d57ac6578ffce3,14.297,3,1800,fc476d6d842a0a4a
+https://github.com/serde-rs/json,2.857,3,1882,3f4a7d3d0795ae04,5.453,3,1882,b38527aa9ad6febc
+https://github.com/BurntSushi/ripgrep,4.068,3,2336,9696baa25ffb2cdf,10.152,3,2336,55570bf0284dec43

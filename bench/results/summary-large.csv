@@ -1,0 +1,8 @@
+repository,rust_median_s,rust_ok_runs,rust_commits,rust_digest,rust_core_digest,haskell_median_s,haskell_ok_runs,haskell_commits,haskell_digest,haskell_core_digest
+https://github.com/pallets/click,4.843,2,3386,71effea90f26cf64,28f040ae80dcb430,8.171,3,3386,8e609211c14a427e,28f040ae80dcb430
+https://github.com/junegunn/fzf,6.077,2,3803,84175a3e792e8208,30f8e820e1b79366,9.897,3,3803,096e09b2f7af4968,30f8e820e1b79366
+https://github.com/tokio-rs/tokio,9.116,2,5100,d07577945d0ff6a0,ce840a78e2521f2f,22.102,3,5100,aab1e70e94040eb1,ce840a78e2521f2f
+https://github.com/pallets/flask,6.002,3,5568,874f9c7e0d5b273b,84553655a233b884,13.51,3,5568,302d0e3947d30eaa,84553655a233b884
+https://github.com/expressjs/express,5.264,3,6247,d384129e6688d663,4b242e52c74645d9,13.156,3,6247,ca300f962bcb3ef9,4b242e52c74645d9
+https://github.com/psf/requests,6.358,3,6734,9bb31e2f084185a6,d6507f289b6b2c20,107.776,3,6734,94159db0d90ad006,37bdbd06c14f0d14
+https://github.com/clap-rs/clap,,0,,,,,0,,,
