@@ -6,7 +6,7 @@ rust-version = "1.85"
 description = "HTTP and WebSocket API for repository metrics"
 license = "BSD-3-Clause"
 authors = ["Nicholas Bisset"]
-repository = "https://github.com/Densetsu152637/Git-Metrics-Rust"
+repository = "https://github.com/Densetsu152637/git-metrics"
 readme = "README.md"
 
 [lib]
