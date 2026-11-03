@@ -1,7 +1,11 @@
 .git
 .github
-.stack-work
-target
-docs
-tests
+bench
 Dockerfile*
+**/target
+**/.stack-work
+**/dist
+**/dist-*
+**/node_modules
+rust/docs
+rust/tests

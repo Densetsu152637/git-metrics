@@ -7,14 +7,14 @@ WORKDIR /build
 
 # Build dependencies first so they stay in a cacheable layer. The placeholder
 # sources are replaced by the real ones below.
-COPY Cargo.toml Cargo.lock ./
+COPY rust/Cargo.toml rust/Cargo.lock ./
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
     echo "" > src/lib.rs && \
     cargo build --locked --release && \
     rm -rf src target/release/git-api target/release/deps/git_api* target/release/deps/libgit_api*
 
-COPY src ./src
+COPY rust/src ./src
 RUN cargo build --locked --release
 
 # -------- Runtime Stage --------

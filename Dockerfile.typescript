@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+
+# -------- Build Stage --------
+# Node 22 LTS, the line the API was last checked against.
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /build
+
+COPY typescript/package.json typescript/package-lock.json ./
+RUN npm ci
+
+COPY typescript/tsconfig.json ./
+COPY typescript/src ./src
+RUN npm run build && npm prune --omit=dev
+
+# -------- Runtime Stage --------
+FROM node:22-bookworm-slim
+
+# Git runs the repository commands; curl serves the health probe.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl git && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/git-api
+COPY --from=builder /build/package.json ./
+COPY --from=builder /build/node_modules ./node_modules
+COPY --from=builder /build/dist ./dist
+
+# The API clones into <cwd>/cloned-repos, so the working directory must be
+# writable by the non-root user.
+RUN mkdir -p /projects/git-api && chown node:node /projects/git-api
+USER node
+WORKDIR /projects/git-api
+EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8081/health || exit 1
+
+CMD ["node", "/opt/git-api/dist/server.js"]

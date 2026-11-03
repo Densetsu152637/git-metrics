@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Rewrote the service in Rust. The executable name (`git-api`), listeners
   (`0.0.0.0:8081`, plus `/tmp/haskell-ipc.sock` on Unix), HTTP/WebSocket
   protocol, JSON shapes, Git commands and parsing rules are unchanged.
-- Container and CI builds use Cargo (`Dockerfile`) instead of GHC/Stack. The CI
+- Container and CI builds use Cargo (`Dockerfile.rust`) instead of GHC/Stack. The CI
   image tag and cache scope are unchanged.
 - Cleanup of cloned repositories now also succeeds for read-only Git object
   files on Windows.
@@ -26,9 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   suffix (for example `owner/..git`) are rejected instead of resolving to a
   parent directory.
 
-### Removed
-
-- The Haskell sources, Cabal/Stack configuration, and `Dockerfile.haskell`.
-  Earlier revisions remain available through Git history.
+- The repository holds one directory per implementation: this service moved
+  to `rust/`, the Haskell service lives on in `haskell/` (and on branch
+  `branch/haskell`), and the original TypeScript API is in `typescript/`. The
+  Dockerfiles (`Dockerfile.rust`, `Dockerfile.haskell`, `Dockerfile.typescript`)
+  stay in the repository root and use it as the build context.
 
 ## 0.1.0 - YYYY-MM-DD

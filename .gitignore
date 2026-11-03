@@ -3,9 +3,15 @@ agents.*.md
 .agents/
 
 # Rust
-/target
+target/
 
-# Legacy Haskell build output (kept ignored for baseline comparisons)
+# Haskell
 .stack-work/
-dist
-dist-*
+dist-newstyle/
+*.o
+*.hi
+
+# TypeScript
+node_modules/
+typescript/dist/
+
