@@ -11,7 +11,6 @@ use std::hash::Hash;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex};
 
-use futures_util::stream::{FuturesOrdered, TryStreamExt};
 use futures_util::FutureExt;
 use tokio::sync::{mpsc, watch, Semaphore};
 use tokio::task::JoinHandle;
@@ -278,10 +277,25 @@ impl WorkerPool {
     }
 }
 
-/// Runs `first` for every input in `first_pool` as soon as possible and hands
-/// each result to `second` in `second_pool` the moment it arrives. Results come
-/// back in input order, and the first failure in input order wins. Dropping the
-/// returned future (or failing early) cancels everything still queued.
+/// Splits `items` into at most `chunks` contiguous runs of near-equal length,
+/// keeping their order.
+fn split_into_chunks<T>(items: Vec<T>, chunks: usize) -> Vec<Vec<T>> {
+    let size = items.len().div_ceil(chunks.max(1)).max(1);
+    let mut items = items.into_iter();
+    std::iter::from_fn(|| {
+        let chunk: Vec<T> = items.by_ref().take(size).collect();
+        (!chunk.is_empty()).then_some(chunk)
+    })
+    .collect()
+}
+
+/// Runs `first` for every input in `first_pool` and collects every
+/// intermediate result in memory. The results are then split into one chunk
+/// per `second_pool` worker, and each chunk is parsed by `second` in a single
+/// blocking task, so parsing spawns one task per worker instead of one per
+/// input. Results come back in input order, and the first failure in input
+/// order wins. Dropping the returned future (or failing early) cancels
+/// everything still queued.
 pub async fn pass_all_async<A, B, C, F1, Fut1, F2>(
     first_pool: &WorkerPool,
     second_pool: &WorkerPool,
@@ -294,28 +308,48 @@ where
     C: Clone + Send + Sync + 'static,
     F1: Fn(A) -> Fut1,
     Fut1: Future<Output = Result<B, String>> + Send + 'static,
-    F2: Fn(Arc<B>) -> Result<C, String> + Send + Sync + 'static,
+    F2: Fn(&B) -> Result<C, String> + Send + Sync + 'static,
 {
-    let second = Arc::new(second);
-    let mut stages: FuturesOrdered<_> = inputs
+    let firsts: Vec<Submitted<B>> = inputs
         .into_iter()
-        .map(|input| {
-            let stage_one = first_pool.submit(first(input));
-            let second = Arc::clone(&second);
-            async move {
-                let intermediate = stage_one.wait().await?;
-                drop(stage_one);
-                let stage_two = second_pool.submit_blocking(move || second(intermediate));
-                stage_two.wait().await
-            }
-        })
+        .map(|input| first_pool.submit(first(input)))
         .collect();
 
-    let mut results = Vec::with_capacity(stages.len());
-    while let Some(value) = stages.try_next().await? {
-        results.push(Arc::try_unwrap(value).unwrap_or_else(|shared| (*shared).clone()));
+    // Stop at the first stage-one failure, but still parse the inputs before
+    // it: their stage-two failures come first in input order.
+    let mut intermediates = Vec::with_capacity(firsts.len());
+    let mut stage_one_error = None;
+    for stage_one in firsts {
+        match stage_one.wait().await {
+            Ok(value) => intermediates.push(value),
+            Err(error) => {
+                stage_one_error = Some(error);
+                break;
+            }
+        }
     }
-    Ok(results)
+
+    let second = Arc::new(second);
+    let chunks: Vec<Submitted<Vec<C>>> =
+        split_into_chunks(intermediates, second_pool.num_workers())
+            .into_iter()
+            .map(|chunk| {
+                let second = Arc::clone(&second);
+                second_pool
+                    .submit_blocking(move || chunk.iter().map(|value| second(value)).collect())
+            })
+            .collect();
+
+    let mut results = Vec::new();
+    for stage_two in chunks {
+        let values = stage_two.wait().await?;
+        drop(stage_two);
+        results.extend(Arc::try_unwrap(values).unwrap_or_else(|shared| (*shared).clone()));
+    }
+    match stage_one_error {
+        Some(error) => Err(error),
+        None => Ok(results),
+    }
 }
 
 /// [`pass_all_async`] for a single input.
@@ -331,7 +365,7 @@ where
     C: Clone + Send + Sync + 'static,
     F1: Fn(A) -> Fut1,
     Fut1: Future<Output = Result<B, String>> + Send + 'static,
-    F2: Fn(Arc<B>) -> Result<C, String> + Send + Sync + 'static,
+    F2: Fn(&B) -> Result<C, String> + Send + Sync + 'static,
 {
     let mut values = pass_all_async(first_pool, second_pool, first, second, vec![input]).await?;
     Ok(values.remove(0))
@@ -512,7 +546,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(u64::from(30 - value * 10))).await;
                 Ok(value * 2)
             },
-            |value: Arc<u32>| Ok(format!("v{value}")),
+            |value: &u32| Ok(format!("v{value}")),
             vec![1, 2, 3],
         )
         .await
@@ -529,7 +563,7 @@ mod tests {
                     Ok(value)
                 }
             },
-            |value: Arc<u32>| Ok(*value),
+            |value: &u32| Ok(*value),
             vec![1, 2, 3],
         )
         .await
@@ -540,11 +574,80 @@ mod tests {
             &first,
             &second,
             |value: u32| async move { Ok(value) },
-            |value: Arc<u32>| -> Result<u32, String> { Err(format!("stage two {value}")) },
+            |value: &u32| -> Result<u32, String> { Err(format!("stage two {value}")) },
             5,
         )
         .await;
         assert_eq!(single, Err("stage two 5".to_owned()));
+    }
+
+    #[test]
+    fn chunks_keep_order_and_never_exceed_the_worker_count() {
+        let lengths = |items: usize, chunks: usize| {
+            split_into_chunks((0..items).collect::<Vec<_>>(), chunks)
+                .iter()
+                .map(Vec::len)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(lengths(10, 4), [3, 3, 3, 1]);
+        assert_eq!(lengths(3, 8), [1, 1, 1]);
+        assert_eq!(lengths(5, 0), [5]);
+        assert!(lengths(0, 4).is_empty());
+        let flat: Vec<_> = split_into_chunks((0..17).collect(), 3)
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(flat, (0..17).collect::<Vec<_>>());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn parsing_spawns_one_task_per_chunk() {
+        let (first, second) = (WorkerPool::new(8, "fetch"), WorkerPool::new(3, "parse"));
+        let threads = Arc::new(Mutex::new(Vec::new()));
+        let recorded = threads.clone();
+        let values = pass_all_async(
+            &first,
+            &second,
+            |value: u32| async move { Ok(value) },
+            move |value: &u32| {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((*value, std::thread::current().id()));
+                Ok(*value)
+            },
+            (0..9).collect(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(values, (0..9).collect::<Vec<_>>());
+        // Each chunk of three runs on one thread, in order.
+        let mut threads = threads.lock().unwrap().clone();
+        threads.sort_by_key(|(value, _)| *value);
+        for chunk in threads.chunks(3) {
+            assert!(chunk.iter().all(|(_, id)| *id == chunk[0].1));
+        }
+    }
+
+    #[tokio::test]
+    async fn earlier_parse_failures_beat_later_fetch_failures() {
+        let (first, second) = (WorkerPool::new(4, "fetch"), WorkerPool::new(2, "parse"));
+        let error = pass_all_async(
+            &first,
+            &second,
+            |value: u32| async move {
+                if value == 2 {
+                    Err("fetch 2".to_owned())
+                } else {
+                    Ok(value)
+                }
+            },
+            |value: &u32| -> Result<u32, String> { Err(format!("parse {value}")) },
+            vec![0, 1, 2, 3],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "parse 0");
     }
 
     #[tokio::test]
@@ -566,7 +669,7 @@ mod tests {
                             Ok(())
                         }
                     },
-                    |_: Arc<()>| Ok(()),
+                    |_: &()| Ok(()),
                     vec![0, 1, 2, 3],
                 )
                 .await

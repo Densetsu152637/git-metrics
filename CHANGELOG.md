@@ -16,9 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   image tag and cache scope are unchanged.
 - Cleanup of cloned repositories now also succeeds for read-only Git object
   files on Windows.
-- Each Git command's output is parsed as soon as it arrives rather than one
-  command at a time in input order. Results and the reported failure still
-  follow input order.
+- A batch of Git commands is fetched into memory first, then parsed in one
+  blocking task per parsing worker (contiguous chunks) instead of one task per
+  command. Results and the reported failure still follow input order.
 
 ### Fixed
 

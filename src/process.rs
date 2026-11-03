@@ -407,8 +407,8 @@ impl RepositoryService {
                 let directory = directory.clone();
                 async move { execute_command(&directory, &command).await }
             },
-            move |result: Arc<CommandResult>| {
-                let output = parsed(message, successful(&result))?;
+            move |result: &CommandResult| {
+                let output = parsed(message, successful(result))?;
                 parsed(message, parser(output))
             },
             command,
@@ -434,8 +434,8 @@ impl RepositoryService {
                 let directory = directory.clone();
                 async move { execute_command(&directory, &command).await }
             },
-            move |result: Arc<CommandResult>| {
-                let output = parsed(message, successful(&result))?;
+            move |result: &CommandResult| {
+                let output = parsed(message, successful(result))?;
                 parsed(message, parser(output))
             },
             commands,
@@ -580,8 +580,7 @@ impl RepositoryService {
                     Ok((details, diff))
                 }
             },
-            move |results: Arc<(CommandResult, CommandResult)>| {
-                let (details, diff) = (&results.0, &results.1);
+            move |(details, diff): &(CommandResult, CommandResult)| {
                 let raw_details = parsed(MESSAGE, successful(details))?;
                 let raw_diff = parsed(MESSAGE, successful(diff))?;
                 let commit = parsed(MESSAGE, parse_commit_data(raw_details))?;

@@ -56,8 +56,10 @@ draining it. Only the leader of a shared analysis owns a progress stream.
   `N` logical cores, never fewer than one. Both are semaphores on the one Tokio
   runtime: commands are ordinary tasks whose pipe and child-exit waits sit in
   the runtime's single IO driver, and parsing runs on its blocking threads so
-  CPU work never stalls request handling. Each command's output is parsed as
-  soon as it arrives; results and the reported failure follow input order.
+  CPU work never stalls request handling. A batch of commands is fetched into
+  memory first, then split into one contiguous chunk per parsing worker, so
+  parsing spawns one blocking task per worker rather than one per command.
+  Results and the reported failure follow input order.
 - **Cancellation is structural.** Dropping an analysis aborts its queued tasks,
   kills its child processes (Tokio `kill_on_drop`), and releases its directory in
   the background. Cleanup failures stay visible as the request error.
